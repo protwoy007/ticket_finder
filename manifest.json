@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Ticket Finder",
+  "version": "2.3.0",
+  "description": "Scans a whole Bangladesh Railway train and finds the best way to split your tickets. No API key needed.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://eticket.railway.gov.bd/*"
+      ],
+      "js": [
+        "core.js",
+        "stations.js",
+        "app.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
