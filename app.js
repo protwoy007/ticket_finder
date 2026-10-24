@@ -263,6 +263,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 .sub{margin:3px 0 0;color:rgba(255,255,255,.78);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .close{margin-left:auto;width:32px;height:32px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.1);color:#fff;cursor:pointer;font-size:19px;line-height:1;transition:background .12s}
 .close:hover{background:rgba(255,255,255,.22)}
+.coffee{margin-left:auto;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:#ffdd00;color:#1a1a1a;font-size:12.5px;font-weight:650;text-decoration:none;white-space:nowrap;cursor:pointer;transition:filter .12s}
+.coffee:hover{filter:brightness(.94)}
+.coffee + .close{margin-left:0}
 .body{flex:1;overflow:auto;padding:2px 20px 24px}
 
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-top:16px;box-shadow:0 1px 2px rgba(16,38,29,.04),0 6px 16px -10px rgba(16,38,29,.12)}
@@ -551,7 +554,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 <style>${CSS}</style>
 <div class="root">
   <section class="panel" id="panel" hidden role="dialog" aria-label="Ticket Finder">
-    <div class="bar" id="bar"><img class="logo" src="${LOGO}" alt=""><div class="ttl"><h1>Ticket Finder</h1><p class="sub">Bangladesh Railway</p></div><button class="close" id="close" aria-label="Close panel">&times;</button></div>
+    <div class="bar" id="bar"><img class="logo" src="${LOGO}" alt=""><div class="ttl"><h1>Ticket Finder</h1><p class="sub">Bangladesh Railway</p></div><a class="coffee" href="https://www.supportkori.com/protwoy" target="_blank" rel="noopener noreferrer">&#9749; Buy me a coffee</a><button class="close" id="close" aria-label="Close panel">&times;</button></div>
     <div class="body" id="scroller">
       <div class="card" style="margin-top:16px">
         <div class="presets"><span class="plabel">${ICON.star}</span><div class="plist" id="plist"></div><button class="btn sm ic" id="psave" type="button" title="Save this route" aria-label="Save this route">${ICON.star}</button></div>
@@ -1123,7 +1126,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
     $("close").onclick = () => toggle(false);
     root.addEventListener("keydown", (e) => { if (e.key === "Escape" && !panel.hidden) toggle(false); });
     $("bar").addEventListener("pointerdown", (e) => {
-      if (e.target.closest("button")) return;
+      if (e.target.closest("button, a")) return;
       const r = panel.getBoundingClientRect();
       panel.style.left = r.left + "px"; panel.style.top = r.top + "px"; panel.style.right = "auto"; panel.style.bottom = "auto";
       const dx = e.clientX - r.left, dy = e.clientY - r.top;
