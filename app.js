@@ -435,6 +435,8 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 .crow.top{border-color:var(--g6);background:linear-gradient(180deg,#f4fbf7,#fff);box-shadow:0 0 0 1px var(--g6),0 10px 24px -14px rgba(15,90,60,.55)}
 .crow.dim{background:var(--soft);border-style:dashed}
 .crow.busy{border-color:var(--g3)}
+.skipbtn{margin-left:auto;height:32px;padding:0 14px;border-radius:9px;border:1px solid #c9d8cf;background:#fff;color:var(--ink);font-weight:650;font-size:12.5px;cursor:pointer}
+.skipbtn:hover{background:var(--soft)}
 .cn{flex:0 0 34px;height:34px;border-radius:11px;background:var(--g1);color:var(--g7);display:grid;place-items:center;font-weight:700;font-size:13px}
 .crow.top .cn{background:linear-gradient(180deg,#ffd987,var(--gold));color:#5b3d00}
 .cm{flex:1 1 340px;min-width:0}
@@ -651,7 +653,8 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       : "Error: " + e.message;
 
     const SORT = "tickets";
-    let eta = null, running = false, stopFlag = false, trainsMeta = {};
+    let eta = null, running = false, stopFlag = false, skipFlag = false, trainsMeta = {};
+    const halted = () => stopFlag || skipFlag;
     let view = { stops: [], stations: [], counts: {}, fi: 0, ti: 0, routes: [], pick: -1, sort: "tickets", shown: 8, updated: 0, iso: "" };
     const setRunning = (on) => { running = on; if (on) resetTiming(); else { eta = null; $("eta").hidden = true; } $("status").classList.toggle("busy", on && !$("status").classList.contains("err")); $("stop").disabled = !on; ["scan", "psave"].forEach((id) => ($(id).disabled = on)); };
     const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -715,7 +718,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       let dropped = [];
       if (!stops) {
         how = "probe";
-        const r = await routeByProbing(ctx, f, say, prog || progress, () => stopFlag);
+        const r = await routeByProbing(ctx, f, say, prog || progress, halted);
         if (!r) return null;
         stops = r.stops; dropped = r.dropped;
       }
@@ -874,7 +877,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         const dead = new Set();
         const n0 = stations.length;
         for (let j = 1; j < n0; j++) {
-          if (stopFlag) break;
+          if (halted()) break;
           say2(`Verifying stop ${j} of ${n0 - 1}: ${stations[j]}`);
           prog(j - 1, n0 - 1, n0 - j + Math.max(0, (n0 * (n0 - 1)) / 2 - (n0 - 1)));
           let c;
@@ -883,7 +886,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
           first.set(stations[j], c);
           if (c === false) dead.add(j);
         }
-        if (stopFlag) { if (live) { say("Stopped."); hideProg(); } return { stopped: true }; }
+        if (halted()) { if (live) { say("Stopped."); hideProg(); } return { stopped: true }; }
         if (dead.has(fi0 - off) || dead.has(ti0 - off)) return fail(`${dead.has(fi0 - off) ? f.from : f.to} is not a stop of ${ctx.name}.`);
         if (dead.size) {
           removed = [...dead].map((j) => stations[j]);
@@ -910,7 +913,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       let done = pairs.filter(([i, j]) => have(i, j)).length, failed = 0, lastErr = "";
       if (live) { renderStats(); renderPills(); renderMatrix(); $("routes").innerHTML = ""; $("more").hidden = true; }
       for (const [i, j] of pairs) {
-        if (stopFlag) break;
+        if (halted()) break;
         if (have(i, j)) continue;
         const had = !!peek(ctx, stations[i], stations[j]);
         say2(`Checking ${stations[i]} → ${stations[j]}`);
@@ -993,7 +996,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         }
         if (e.state === "none" && e.view) return `<div class="crow dim" data-id="${esc(e.id)}" tabindex="0" role="button">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span><span class="mchip bad" title="No way to travel">${ICON.x}</span></div>${lineHtml(e.view, true)}</div></div>`;
         const icon = e.state === "busy" ? `<span class="spin" title="Scanning">${ICON.refresh}</span>` : e.state === "wait" ? `<span title="Waiting">${ICON.clock}</span>` : `<span title="${esc(e.reason || "Could not scan")}">${ICON.x}</span>`;
-        return `<div class="crow ${e.state === "busy" ? "busy" : "dim"}">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span><span class="mchip ${e.state === "failed" ? "bad" : ""}" style="margin-left:0">${icon}</span>${e.state === "failed" ? `<small style="color:var(--muted)">${esc(e.reason || "")}</small>` : ""}</div></div></div>`;
+        return `<div class="crow ${e.state === "busy" ? "busy" : "dim"}">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span><span class="mchip ${e.state === "failed" ? "bad" : ""}" style="margin-left:0">${icon}</span>${e.state === "failed" || e.state === "skipped" ? `<small style="color:var(--muted)">${esc(e.reason || "")}</small>` : ""}</div></div>${e.state === "busy" ? `<button class="skipbtn" type="button" title="Skip this train and scan the next one">Skip</button>` : ""}</div>`;
       }).join("");
       root.querySelectorAll(".crow[data-id]").forEach((el) => {
         const go = () => { if (!running) openTrain(el.dataset.id); };
@@ -1047,8 +1050,10 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       const todo = order.filter((e) => e.state === "wait");
       const direct = order.length - todo.length;
       let avgReq = 25, used = 0, doneN = 0;
+      skipFlag = false;
       for (const e of todo) {
         if (stopFlag) break;
+        skipFlag = false;
         e.state = "busy"; renderCompare();
         const startReq = reqCount;
         const label = `Train ${doneN + 1} of ${todo.length}`;
@@ -1056,12 +1061,14 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         let r;
         try { r = await scanOne({ ...f, id: e.id }, { whole: false, live: false, tag: `${label}: ${e.name}`, prog }); }
         catch (err) { if (err.message === "AUTH") throw err; r = { err: err.message }; }
+        if (skipFlag && !stopFlag) { skipFlag = false; e.state = "skipped"; e.reason = "Skipped"; doneN++; renderCompare(); continue; }
         if (r.stopped || stopFlag) { e.state = "wait"; break; }
         if (r.err) { e.state = "failed"; e.reason = r.err; }
         else { e.view = r.view; e.note = r.note; e.best = r.view.routes[0] || null; e.state = e.best ? "ok" : "none"; }
         doneN++; used += reqCount - startReq; avgReq = Math.max(5, used / doneN);
         renderCompare();
       }
+      skipFlag = false;
       hideProg();
       renderCompare();
       const extra = (direct ? ` ${direct} train${direct > 1 ? "s have" : " has"} a direct seat and ${direct > 1 ? "were" : "was"} not scanned.` : "") + (usable.length < trains.length ? ` ${trains.length - usable.length} train${trains.length - usable.length > 1 ? "s" : ""} without ${clsName(f.cls)} left out.` : "");
@@ -1114,6 +1121,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 
     $("scan").onclick = runScan;
     $("stop").onclick = () => { stopFlag = true; say("Stopping…"); };
+    $("cmp").addEventListener("click", (e) => { if (!e.target.closest(".skipbtn") || !running) return; skipFlag = true; say("Skipping this train…"); });
     $("copy").onclick = async () => {
       const onCompare = !$("ccompare").hidden && $("out").hidden;
       const sortNow = SORT;
