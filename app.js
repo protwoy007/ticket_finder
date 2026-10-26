@@ -5,11 +5,21 @@
   window.__TICKET_FINDER__ = true;
 
   const C = window.TSF_CORE;
+  const legFor = C.legFor || ((c) => {
+    if (!c) return null;
+    if (c.online > 0) return { cls: c.cls, online: c.online, offline: c.offline, fare: c.fare, alt: false };
+    if (c.alt && c.alt.length) {
+      const a = [...c.alt].sort((x, y) => x.fare - y.fare || y.online - x.online)[0];
+      return { cls: a.cls, online: a.online, offline: a.offline, fare: a.fare, alt: true };
+    }
+    return null;
+  });
   const S = window.TSF_STATIONS;
   const BASE = "https://railspaapi.shohoz.com/v1.0/web";
   const API = BASE + "/bookings";
   const MIN_GAP_MS = 1500;
   const JITTER_MS = 400;
+  const VERSION = "2.4.0";
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) =>
     String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -22,7 +32,7 @@
     try {
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
-        if (k && k.startsWith("tsf2_p|")) localStorage.removeItem(k);
+        if (k && (k.startsWith("tsf2_p|") || k.startsWith("tsf3_route|") || k === "tsf2_form")) localStorage.removeItem(k);
       }
     } catch (e) {}
   })();
@@ -38,6 +48,8 @@
   const origFetch = window.fetch;
   window.fetch = function (input, init) {
     try {
+      const fu = typeof input === "string" ? input : input && input.url;
+      if (fu && /search-trips/i.test(fu)) siteSearch(fu);
       const h = (init && init.headers) || (input && input.headers);
       if (h) {
         if (typeof Headers !== "undefined" && h instanceof Headers) h.forEach((v, k) => remember(k, v));
@@ -48,6 +60,14 @@
     return origFetch.apply(this, arguments);
   };
 
+  let onSiteSearch = null;
+  function siteSearch(u) {
+    try {
+      const q = new URL(u, location.href).searchParams;
+      const from = (q.get("from_city") || "").trim(), to = (q.get("to_city") || "").trim();
+      if (from && to && onSiteSearch) onSiteSearch({ from, to, date: q.get("date_of_journey") || "", cls: q.get("seat_class") || "" });
+    } catch (e) {}
+  }
   const learned = new Set(store.get("tsf2_known") || []);
   function learn(names) {
     let changed = false;
@@ -63,6 +83,7 @@
     try {
       const u = String(url);
       if (!this._tsfOwn && /railspaapi|shohoz|railway\.gov\.bd/i.test(u)) {
+        if (/search-trips/i.test(u)) siteSearch(u);
         this.addEventListener("load", () => {
           try {
             const j = JSON.parse(this.responseText);
@@ -146,10 +167,17 @@
   function analyse(trains, id, cls) {
     const train = trains.find((t) => C.trainId(t.trip_number) === id);
     if (!train) return false;
-    const st = (train.seat_types || []).find((s) => s.type === cls);
-    if (!st) return false;
-    const sc = st.seat_counts || {};
-    return { online: Number(sc.online) || 0, offline: Number(sc.offline) || 0, fare: Number(st.fare) || 0, oseq: st.origin_city_seq, dseq: st.destination_city_seq };
+    const types = train.seat_types || [];
+    const read = (st) => {
+      const sc = st.seat_counts || {};
+      return { online: Number(sc.online) || 0, offline: Number(sc.offline) || 0, fare: Number(st.fare) || 0, oseq: st.origin_city_seq, dseq: st.destination_city_seq };
+    };
+    const st = types.find((x) => x.type === cls);
+    const alt = types.filter((x) => x.type !== cls).map((x) => ({ cls: x.type, ...read(x) })).filter((x) => x.online > 0);
+    const first = st || types[0];
+    if (!first) return false;
+    const base = read(first);
+    return st ? { ...base, cls, alt } : { ...base, online: 0, offline: 0, fare: 0, cls, alt };
   }
   const memoKey = (ctx, a, b) => `${ctx.date}|${ctx.cls}|${ctx.id}|${a}|${b}`;
   function peek(ctx, a, b) {
@@ -213,7 +241,7 @@
     for (let i = 0; i < pool.length; i++) {
       if (stopped()) return null;
       if (need.size === 0 && base && base.dseq - base.oseq > 1 && ok.length) { dropped.push(...pool.slice(i)); break; }
-      say(`Checking stop ${i + 1} of ${pool.length}: ${pool[i]}`);
+      say("Searching…");
       progress(i, pool.length, pool.length - i + extra);
       let found = null;
       for (const v of S.variants(pool[i])) {
@@ -437,6 +465,31 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 .crow.busy{border-color:var(--g3)}
 .skipbtn{margin-left:auto;height:32px;padding:0 14px;border-radius:9px;border:1px solid #c9d8cf;background:#fff;color:var(--ink);font-weight:650;font-size:12.5px;cursor:pointer}
 .skipbtn:hover{background:var(--soft)}
+.min{width:32px;height:32px;border-radius:9px;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.1);color:#fff;cursor:pointer;font-size:19px;line-height:1;transition:background .12s}
+.min:hover{background:rgba(255,255,255,.22)}
+.min + .close{margin-left:0}
+.panel.mini{height:auto;min-height:0;width:min(520px,96vw);min-width:0}
+.panel.mini .body,.panel.mini .foot{display:none}
+.dbtn{width:100%;height:38px;padding:0 11px 0 37px;border:1px solid #c9d8cf;border-radius:10px;background:#fbfdfc;text-align:left;cursor:pointer;font-variant-numeric:tabular-nums;transition:border-color .12s,box-shadow .12s,background .12s}
+.dbtn:hover{border-color:#a6bbad}
+.dbtn:focus-visible{outline:none;background:#fff;border-color:var(--g6);box-shadow:0 0 0 3px rgba(27,128,88,.2)}
+.dbtn.empty{color:var(--muted)}
+.cal{position:absolute;z-index:40;top:calc(100% + 6px);left:0;width:268px;padding:12px;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px -10px rgba(16,38,29,.35)}
+.cal[hidden]{display:none}
+.calh{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;font-weight:700;font-size:13px}
+.calh button{width:28px;height:28px;border:1px solid #c9d8cf;border-radius:8px;background:#fff;cursor:pointer;line-height:1;font-size:16px}
+.calh button[disabled]{opacity:.35;cursor:default}
+.calg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+.calg b{font-size:10.5px;color:var(--muted);font-weight:650;padding:3px 0}
+.calg button{height:32px;border:0;border-radius:8px;background:transparent;cursor:pointer;font-size:12.5px;font-variant-numeric:tabular-nums}
+.calg button:hover:not([disabled]){background:var(--soft)}
+.calg button.on{background:linear-gradient(180deg,var(--g6),var(--g7));color:#fff;font-weight:700}
+.calg button.today{box-shadow:inset 0 0 0 1px var(--g6)}
+.calg button[disabled]{opacity:.28;cursor:default}
+.eta #etaCount{font-size:13px;font-weight:700;color:var(--ink)}
+.cpy{margin-left:auto;flex:0 0 auto;width:32px;height:32px;display:grid;place-items:center;border-radius:9px;border:1px solid #c9d8cf;background:#fff;color:var(--g7);cursor:pointer}
+.cpy:hover{background:var(--soft);border-color:#a6bbad}
+.cpy svg{width:16px;height:16px}
 .cn{flex:0 0 34px;height:34px;border-radius:11px;background:var(--g1);color:var(--g7);display:grid;place-items:center;font-weight:700;font-size:13px}
 .crow.top .cn{background:linear-gradient(180deg,#ffd987,var(--gold));color:#5b3d00}
 .cm{flex:1 1 340px;min-width:0}
@@ -447,6 +500,17 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 .cmet small{display:block;color:var(--muted);font-size:10.5px;font-weight:650;text-transform:uppercase;letter-spacing:.05em}
 .cmet b{display:block;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:1px}
 .cmet .fare b{color:var(--g7)}
+.root{--alt:#4a53c2;--alt-bg:#e6e9fb}
+.pill.e{background:linear-gradient(180deg,#6670d8,var(--alt))}
+.pcx{display:block;font-size:10px;font-weight:700;color:var(--alt);max-width:46px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.alt{background:var(--alt-bg);color:var(--alt);font-weight:700}
+.jl.alt .jm s{background:linear-gradient(90deg,#6670d8,var(--alt))}
+.jl.alt .jm s::after{border-left-color:var(--alt)}
+.jl.alt .tb{color:var(--alt);background:var(--alt-bg)}
+.cxs{display:block;color:var(--alt);font-weight:700;font-size:11px}
+.cx{display:inline-block;margin-left:8px;padding:0 7px;border-radius:99px;font-size:11px;font-weight:700;background:var(--g1);color:var(--g7)}
+.cx.alt,.chip.alt{background:var(--alt-bg);color:var(--alt);border-color:#c7ccf1}
+.lb.a{background:linear-gradient(90deg,#6670d8,var(--alt))}
 .cmsg{color:var(--muted);flex:1;min-width:140px}
 
 .bar{background:radial-gradient(circle at 92% -40%,rgba(42,157,111,.5),transparent 50%),linear-gradient(120deg,#12154a 0%,#212780 62%,#2c3496 100%)}
@@ -556,29 +620,28 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 <style>${CSS}</style>
 <div class="root">
   <section class="panel" id="panel" hidden role="dialog" aria-label="Ticket Finder">
-    <div class="bar" id="bar"><img class="logo" src="${LOGO}" alt=""><div class="ttl"><h1>Ticket Finder</h1><p class="sub">Bangladesh Railway</p></div><a class="coffee" href="https://www.supportkori.com/protwoy" target="_blank" rel="noopener noreferrer">&#9749; Buy me a coffee</a><button class="close" id="close" aria-label="Close panel">&times;</button></div>
+    <div class="bar" id="bar"><img class="logo" src="${LOGO}" alt=""><div class="ttl"><h1>Ticket Finder</h1><p class="sub">Bangladesh Railway · v${VERSION}</p></div><a class="coffee" href="https://www.supportkori.com/protwoy" target="_blank" rel="noopener noreferrer">&#9749; Buy me a coffee</a><button class="min" id="min" type="button" aria-label="Minimize panel" title="Minimize">&minus;</button><button class="close" id="close" aria-label="Close panel">&times;</button></div>
     <div class="body" id="scroller">
       <div class="card" style="margin-top:16px">
         <div class="presets"><span class="plabel">${ICON.star}</span><div class="plist" id="plist"></div><button class="btn sm ic" id="psave" type="button" title="Save this route" aria-label="Save this route">${ICON.star}</button></div>
         <div class="grid">
           <div class="fld"><span class="fi">${ICON.pin}</span><input id="from" list="stl" autocomplete="off" placeholder="From" aria-label="From" title="From"></div>
           <div class="fld"><span class="fi">${ICON.flag}</span><input id="to" list="stl" autocomplete="off" placeholder="To" aria-label="To" title="To"></div>
-          <div class="fld"><span class="fi">${ICON.cal}</span><input id="date" type="date" aria-label="Date" title="Date"></div>
+          <div class="fld"><span class="fi">${ICON.cal}</span><input id="date" type="hidden"><button class="dbtn empty" id="dateBtn" type="button" aria-label="Date" title="Date (dd/mm/yyyy)" aria-haspopup="dialog">dd/mm/yyyy</button><div class="cal" id="cal" hidden></div></div>
           <div class="fld"><span class="fi">${ICON.seat}</span><select id="cls" aria-label="Class" title="Class"></select></div>
         </div>
         <datalist id="stl"></datalist>
         <div class="actions">
           <button class="btn main" id="scan">${ICON.scan}<span id="scanLabel">Scan all trains</span></button>
           <span class="grow"></span>
-          <button class="btn ic" id="stop" disabled title="Stop" aria-label="Stop">${ICON.stop}</button>
-          <button class="btn ic" id="copy" disabled title="Copy best routes" aria-label="Copy best routes">${ICON.copy}</button>
+          <button class="btn" id="stop" disabled title="Stop" aria-label="Stop">Stop</button>
         </div>
       </div>
       <div class="status" id="status" aria-live="polite">Log in and search once on the site, then press Scan all trains.</div>
       <div class="prog" id="progwrap" hidden><i id="prog"></i></div>
       <div class="eta" id="eta" hidden><span id="etaCount"></span><span id="etaAt"></span><span id="etaLeft"></span></div>
       <div class="notes" id="notes"></div>
-      <div class="card" id="ccompare" hidden><div class="head"><h2>Best per train<span id="cmpSub"></span><span class="info" id="cmpInfo" hidden tabindex="0">${ICON.info}</span></h2><div class="lgd"><span class="lg"><i class="lb g"></i>Seats</span><span class="lg"><i class="lb r"></i>Sold out</span><span class="lg">${ICON.swap}Change seat</span></div></div><div class="cwrap"><div class="cmp" id="cmp"></div></div></div>
+      <div class="card" id="ccompare" hidden><div class="head"><h2>Best per train<span id="cmpSub"></span><span class="info" id="cmpInfo" hidden tabindex="0">${ICON.info}</span></h2><div class="lgd"><span class="lg"><i class="lb g"></i>Seats</span><span class="lg"><i class="lb r"></i>Sold out</span><span class="lg"><i class="lb a"></i>Other class</span><span class="lg">${ICON.swap}Change seat</span></div></div><div class="cwrap"><div class="cmp" id="cmp"></div></div></div>
       <div id="out" hidden>
         <div class="stats" id="stats"></div>
         <div class="card" id="cseats"><h2>Seats along the line</h2><div class="pills" id="pills"></div></div>
@@ -588,9 +651,10 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
             <span>Few<i class="ramp"></i>Many</span>
             <span><i class="sw" style="background:var(--amber-bg);border:1px solid var(--amber-ink)"></i>≤ 3</span>
             <span><i class="sw" style="background:repeating-linear-gradient(135deg,var(--hatch) 0 2px,transparent 2px 5px);border:1px solid var(--line)"></i>Sold out</span>
+            <span><i class="sw" style="background:var(--alt-bg);border:1px solid var(--alt)"></i>Other class</span>
             <span><i class="sw" style="box-shadow:inset 0 0 0 2px var(--focus)"></i>Direct</span>
           </div></div>
-        <div class="card" id="croutes"><div class="head"><h2><span id="rtitle">Ways to travel</span></h2><div class="lgd"><span class="lg"><i class="lb g"></i>Seats</span><span class="lg"><i class="lb r"></i>Sold out</span><span class="lg">${ICON.swap}Change seat</span></div></div><div id="routes"></div><button class="btn more" id="more" hidden title="Show more" aria-label="Show more"></button></div>
+        <div class="card" id="croutes"><div class="head"><h2><span id="rtitle">Ways to travel</span></h2><div class="lgd"><span class="lg"><i class="lb g"></i>Seats</span><span class="lg"><i class="lb r"></i>Sold out</span><span class="lg"><i class="lb a"></i>Other class</span><span class="lg">${ICON.swap}Change seat</span></div></div><div id="routes"></div><button class="btn more" id="more" hidden title="Show more" aria-label="Show more"></button></div>
       </div>
     </div>
     <footer class="foot">Khaled 2026</footer>
@@ -615,7 +679,6 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
     const knownNames = () => [...new Set([...S.all(), ...learned])];
     const refreshList = () => { $("stl").innerHTML = knownNames().sort().map((n) => `<option value="${esc(n)}">`).join(""); };
     refreshList();
-    $("date").min = C.todayIso();
     const say = (t, kind) => { $("status").textContent = t; $("status").className = "status" + (kind === true ? " err" : kind === "ok" ? " ok" : running ? " busy" : ""); };
     const sayMain = say;
     const note = (t, loud) => {
@@ -626,27 +689,75 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       el.innerHTML = `<span class="info" tabindex="0" title="${esc(t)}">${ICON.info}</span>`;
     };
 
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const toIso = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const fromIso = (x) => { const [y, m, d] = x.split("-").map(Number); return new Date(y, m - 1, d); };
+    const dmy = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
+    const minIso = () => C.todayIso();
+    const maxIso = () => { const d = fromIso(C.todayIso()); d.setDate(d.getDate() + 10); return toIso(d); };
+    const inRange = (iso) => !!iso && iso >= minIso() && iso <= maxIso();
+    const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    let calMonth = null;
+    function setDate(iso) {
+      const ok = inRange(iso) ? iso : "";
+      $("date").value = ok;
+      $("dateBtn").textContent = ok ? dmy(ok) : "dd/mm/yyyy";
+      $("dateBtn").classList.toggle("empty", !ok);
+      return ok;
+    }
+    function drawCal() {
+      const y = calMonth.getFullYear(), m = calMonth.getMonth();
+      const lo = minIso(), hi = maxIso(), cur = $("date").value, today = C.todayIso();
+      const lead = new Date(y, m, 1).getDay(), days = new Date(y, m + 1, 0).getDate();
+      const prevOk = toIso(new Date(y, m, 0)) >= lo, nextOk = toIso(new Date(y, m + 1, 1)) <= hi;
+      let h = `<div class="calh"><button type="button" data-nav="-1" ${prevOk ? "" : "disabled"} aria-label="Previous month">&lsaquo;</button><span>${MONTHS[m]} ${y}</span><button type="button" data-nav="1" ${nextOk ? "" : "disabled"} aria-label="Next month">&rsaquo;</button></div><div class="calg">`;
+      ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"].forEach((d) => (h += `<b>${d}</b>`));
+      for (let i = 0; i < lead; i++) h += "<span></span>";
+      for (let d = 1; d <= days; d++) {
+        const iso = `${y}-${pad2(m + 1)}-${pad2(d)}`;
+        h += `<button type="button" data-d="${iso}" class="${iso === cur ? "on" : ""} ${iso === today ? "today" : ""}" ${iso >= lo && iso <= hi ? "" : "disabled"}>${d}</button>`;
+      }
+      $("cal").innerHTML = h + "</div>";
+    }
+    $("dateBtn").onclick = () => {
+      if (!$("cal").hidden) { $("cal").hidden = true; return; }
+      const base = fromIso($("date").value || C.todayIso());
+      calMonth = new Date(base.getFullYear(), base.getMonth(), 1);
+      drawCal();
+      $("cal").hidden = false;
+    };
+    $("cal").addEventListener("click", (e) => {
+      const nav = e.target.closest("[data-nav]"), day = e.target.closest("[data-d]");
+      if (nav && !nav.disabled) { calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + +nav.dataset.nav, 1); drawCal(); }
+      else if (day && !day.disabled) { setDate(day.dataset.d); $("cal").hidden = true; formChanged(); }
+    });
+    root.addEventListener("click", (e) => {
+      if ($("cal").hidden) return;
+      const path = e.composedPath();
+      if (!path.includes($("cal")) && !path.includes($("dateBtn"))) $("cal").hidden = true;
+    });
+
     function prefill() {
-      const saved = store.get("tsf2_form") || {};
       const q = new URLSearchParams(location.search);
       const set = (id, v) => { if (v && !$(id).value) $(id).value = v; };
-      set("from", q.get("fromcity") || saved.from);
-      set("to", q.get("tocity") || saved.to);
-      set("date", C.apiToIso(q.get("doj")) || (saved.date && saved.date >= C.todayIso() ? saved.date : ""));
+      set("from", q.get("fromcity"));
+      set("to", q.get("tocity"));
+      if (!$("date").value) setDate(C.apiToIso(q.get("doj")) || "");
       const qc = q.get("class");
-      if (qc && C.CLASSES.some(([v]) => v === qc)) $("cls").value = qc; else if (saved.cls) $("cls").value = saved.cls;
+      if (qc && C.CLASSES.some(([v]) => v === qc)) $("cls").value = qc;
       $("ccompare").hidden = !results.size;
       renderPresets();
     }
-    const saveForm = () => store.set("tsf2_form", { from: $("from").value, to: $("to").value, date: $("date").value, cls: $("cls").value });
+    const saveForm = () => {};
     function readForm() {
+      if (!inRange($("date").value)) setDate("");
       const known = knownNames();
       const from = C.fixStation($("from").value, known), to = C.fixStation($("to").value, known);
       $("from").value = from; $("to").value = to;
       saveForm();
       return { from, to, date: C.isoToApi($("date").value), iso: $("date").value, cls: $("cls").value, sort: SORT, id: "" };
     }
-    const needAuth = () => { if (auth.authorization) return false; say("Not ready yet. Log in, search for a train on the site once, then try again.", true); return true; };
+    const needAuth = () => { if (auth.authorization) return false; say("Log in.", true); return true; };
     const explain = (e) =>
       e.message === "AUTH" ? "Session problem. Refresh the page, search once on the site, and try again."
       : e.message === "BAD_INPUT" ? "The railway site did not accept that request. Check the station names and date."
@@ -656,16 +767,13 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
     let eta = null, running = false, stopFlag = false, skipFlag = false, trainsMeta = {};
     const halted = () => stopFlag || skipFlag;
     let view = { stops: [], stations: [], counts: {}, fi: 0, ti: 0, routes: [], pick: -1, sort: "tickets", shown: 8, updated: 0, iso: "" };
-    const setRunning = (on) => { running = on; if (on) resetTiming(); else { eta = null; $("eta").hidden = true; } $("status").classList.toggle("busy", on && !$("status").classList.contains("err")); $("stop").disabled = !on; ["scan", "psave"].forEach((id) => ($(id).disabled = on)); };
+    const setRunning = (on) => { running = on; if (on) resetTiming(); else { eta = null; $("eta").hidden = true; } $("status").classList.toggle("busy", on && !$("status").classList.contains("err")); $("stop").disabled = !on; ["scan", "psave"].forEach((id) => ($(id).disabled = on)); if (!on && pendingSite) { const p = pendingSite; pendingSite = null; applySite(p); } };
     const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const span = (sec) => (sec < 60 ? sec + " s" : Math.floor(sec / 60) + " min " + String(sec % 60).padStart(2, "0") + " s");
     function showEta() {
       if (!eta) return;
-      const left = Math.max(0, Math.round((eta.finishAt - Date.now()) / 1000));
       $("eta").hidden = false;
-      $("etaCount").textContent = eta.label || `${eta.done} of ${eta.total} checked`;
-      $("etaAt").innerHTML = `Finishes at <strong>${esc(clock(eta.finishAt))}</strong>`;
-      $("etaLeft").textContent = left > 0 ? span(left) + " left" : "Almost done";
+      $("etaCount").textContent = Math.min(100, Math.max(0, Math.round((eta.done / eta.total) * 100))) + "%";
     }
     function progress(done, total, remaining, label) {
       $("progwrap").hidden = total === 0;
@@ -697,7 +805,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       ctx.end = String(pr.destination_city_name || "").trim();
       ctx.base = null;
       if (ctx.start && ctx.end) {
-        say(`${ctx.name} runs ${ctx.start} → ${ctx.end}. Reading the whole line…`);
+        say("Searching…");
         try { ctx.base = await fetchPair(ctx, ctx.start, ctx.end); } catch (e) { if (e.message === "AUTH") throw e; }
       }
       if (!ctx.base) { ctx.start = f.from; ctx.end = f.to; ctx.base = analyse([train], f.id, f.cls); note("Could not read the whole line, so only your own trip is scanned."); }
@@ -706,9 +814,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
 
     async function getStops(ctx, f, prog, sayFn) {
       const say = sayFn || sayMain;
-      const key = `tsf3_route|${ctx.id}|${ctx.start}|${ctx.end}`;
-      { const c = store.get(key); if (Array.isArray(c) && c.length >= 2) return { stops: c, how: "saved" }; }
-      say("Reading every stop of the train from the railway site…");
+      say("Searching…");
       let stops = await routeFromSite(ctx, ctx.train);
       let how = "site";
       if (stops) {
@@ -722,7 +828,6 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         if (!r) return null;
         stops = r.stops; dropped = r.dropped;
       }
-      if (stops.length >= 2) store.set(key, stops);
       return { stops, how, dropped };
     }
 
@@ -742,7 +847,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       const cards = [
         card("s2", ICON.route, "Ways", routes.length, best ? `<em>${best.tickets}</em>${ICON.ticket.replace("<svg", "<svg width=\"14\" height=\"14\"")}` : "–", arrow("croutes", "Jump to routes")),
       ];
-      if (depMs != null) cards.push(card("s4", ICON.clock, `Leaves in`, `<span id="count" data-ms="${depMs}">–</span>`, `<em>${esc(fmtT(dep))}</em>${esc(iso)}`));
+      if (depMs != null) cards.push(card("s4", ICON.clock, `Leaves in`, `<span id="count" data-ms="${depMs}">–</span>`, `<em>${esc(fmtT(dep))}</em>${esc(dmy(iso))}`));
       $("stats").innerHTML = cards.join("");
       root.querySelectorAll("[data-jump]").forEach((b) => (b.onclick = () => $(b.dataset.jump).scrollIntoView({ behavior: "smooth", block: "start" })));
       tick();
@@ -760,21 +865,25 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
     function renderPills() {
       const { stations, counts } = view;
       const seg = stations.slice(0, -1).map((_, i) => counts[i + "," + (i + 1)]);
-      const max = Math.max(1, ...seg.map((c) => (c && c.online > 0 ? c.online : 0)));
-      const live = seg.filter((c) => c && c.online > 0);
-      const low = live.length ? Math.min(...live.map((c) => c.online)) : null;
+      const legs = seg.map((c) => legFor(c));
+      const max = Math.max(1, ...legs.map((l) => (l ? l.online : 0)));
+      const live = legs.filter(Boolean);
+      const low = live.length ? Math.min(...live.map((l) => l.online)) : null;
       let tagged = false;
       $("pills").innerHTML = seg.map((c, i) => {
+        const l = legs[i];
         const tip = `${stations[i]} → ${stations[i + 1]}`;
         let cls, h, tag = "";
-        if (!c || c.online <= 0) { cls = "hz"; h = 46; }
+        if (!l) { cls = "hz"; h = 46; }
         else {
-          const r = c.online / max;
-          cls = c.online <= 3 ? "d" : r >= 0.66 ? "a" : r >= 0.33 ? "b" : "c";
+          const r = l.online / max;
+          cls = l.alt ? "e" : l.online <= 3 ? "d" : r >= 0.66 ? "a" : r >= 0.33 ? "b" : "c";
           h = 30 + Math.round(r * 70);
-          if (c.online === low && !tagged && live.length > 1) { tagged = true; tag = `<span class="ptag">fewest: ${c.online}</span>`; }
+          if (l.online === low && !tagged && live.length > 1) { tagged = true; tag = `<span class="ptag">fewest: ${l.online}</span>`; }
         }
-        return `<div class="pcol" title="${esc(tip)}${c && c.online > 0 ? ": " + c.online + " seats" : c === undefined ? "" : ": none"}"><div class="ptrack">${tag}<div class="pill ${cls}" style="height:${h}%"></div></div><span class="plab">${esc(short(stations[i + 1]))}</span></div>`;
+        const info = l ? `: ${l.online} seats${l.alt ? " in " + clsName(l.cls) : ""}` : c === undefined ? "" : ": none";
+        const lab = l && l.alt ? `<span class="pcx">${esc(clsName(l.cls))}</span>` : "";
+        return `<div class="pcol" title="${esc(tip + info)}"><div class="ptrack">${tag}<div class="pill ${cls}" style="height:${h}%"></div></div><span class="plab">${esc(short(stations[i + 1]))}</span>${lab}</div>`;
       }).join("");
     }
 
@@ -797,6 +906,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
           if (c === undefined) h += `<td class="${ex}" title="${tip}"></td>`;
           else if (c === null) h += `<td class="err${ex}" title="${tip}: lookup failed, press Scan again">!</td>`;
           else if (c === false) h += `<td class="na${ex}" title="${tip}: this train does not run this pair">–</td>`;
+          else if (c.online <= 0 && legFor(c)) { const l = legFor(c); h += `<td class="alt${ex}" title="${tip}: sold out in ${esc(clsName(c.cls))}, ${l.online} in ${esc(clsName(l.cls))}, ৳${l.fare}">${l.online}</td>`; }
           else if (c.online <= 0) h += `<td class="zero${ex}" title="${tip}: sold out online (${c.offline} at counter)">0</td>`;
           else if (c.online <= 3) h += `<td class="few${ex}" title="${tip}: ${c.online} online, ${c.offline} at counter, ৳${c.fare}">${c.online}</td>`;
           else { const l = C.heatLight(c.online); h += `<td class="h${l > 56 ? " lt" : ""}${ex}" style="background:hsl(152 45% ${l}%)" title="${tip}: ${c.online} online, ${c.offline} at counter, ৳${c.fare}">${c.online}</td>`; }
@@ -806,41 +916,54 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       $("mwrap").innerHTML = h + "</tbody></table>";
     }
 
-    const segHtml = (s, n) => {
+    const segHtml = (s, n, mixed) => {
       const { stops, stations } = view;
+      const cx = mixed ? `<span class="cx${s.c.alt ? " alt" : ""}">${esc(clsName(s.c.cls))}</span>` : "";
       const a = timeOf(stops[s.a], false), b = timeOf(stops[s.b], true);
-      return `<div class="seg"><span class="tg">${ICON.ticket}${n}</span><span class="sr">${esc(stations[s.a])}${a ? ` <small>${esc(a)}</small>` : ""} → ${esc(stations[s.b])}${b ? ` <small>${esc(b)}</small>` : ""}</span><span class="mt">৳${s.c.fare}<span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">${ICON.seat}${s.c.online}</span></span></div>`;
+      return `<div class="seg"><span class="tg">${ICON.ticket}${n}</span><span class="sr">${esc(stations[s.a])}${a ? ` <small>${esc(a)}</small>` : ""} → ${esc(stations[s.b])}${b ? ` <small>${esc(b)}</small>` : ""}${cx}</span><span class="mt">৳${s.c.fare}<span style="display:inline-flex;align-items:center;gap:4px;margin-left:8px">${ICON.seat}${s.c.online}</span></span></div>`;
     };
+    const altChips = (r) => [...new Set(r.segs.filter((g) => g.c.alt).map((g) => g.c.cls))].map((k) => `<span class="chip alt" title="Sold out in the class you searched, free in this class">${esc(clsName(k))}</span>`).join("");
     const segLine = (s) => {
       const { stops, stations } = view;
       const a = timeOf(stops[s.a], false), b = timeOf(stops[s.b], true);
-      return `${stations[s.a]}${a ? " " + a : ""} → ${stations[s.b]}${b ? " " + b : ""}  (৳${s.c.fare}, ${s.c.online} seats)`;
+      return `${stations[s.a]}${a ? " " + a : ""} → ${stations[s.b]}${b ? " " + b : ""}  (৳${s.c.fare}, ${s.c.online} seats${s.c.alt ? ", " + clsName(s.c.cls) : ""})`;
     };
+    async function copyText(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+        say("Copied.", "ok");
+        if (btn && btn.isConnected) { btn.innerHTML = ICON.check; setTimeout(() => { if (btn.isConnected) btn.innerHTML = ICON.copy; }, 1200); }
+      } catch (e) { say("Could not copy. Select the text and copy it by hand.", true); }
+    }
     function renderRoutes() {
       const { routes } = view;
       const box = $("routes");
       $("rtitle").innerHTML = `Ways to travel<span class="mchip ${routes.length ? "ok" : "bad"}">${routes.length ? ICON.check : ICON.x}${routes.length}</span>`;
       if (!routes.length) {
         box.innerHTML = `<div class="nores">${lineHtml(view)}</div>`;
-        $("more").hidden = true; $("copy").disabled = true;
+        $("more").hidden = true;
         return;
       }
-      $("copy").disabled = false;
       const shown = Math.min(view.shown, routes.length);
       box.innerHTML = routes.slice(0, shown).map((r, i) => {
         const extra = r.extra ? `<span class="chip warn" title="Pays for ${r.extra} extra stop${r.extra > 1 ? "s" : ""}">+${r.extra} ${ICON.pin}</span>` : "";
         let n = 0;
         return `<div class="row ${i === view.pick ? "on" : ""}" data-i="${i}" tabindex="0" role="button" aria-pressed="${i === view.pick}">
           <div class="num">${i + 1}</div>
-          <div class="mid"><div class="rt"><span class="chip" title="Tickets">${ICON.ticket}${r.tickets}</span><span class="chip" title="Total fare">৳${r.fare}</span><span class="chip" title="Fewest seats left">${ICON.seat}${r.minSeats}</span>${extra}</div>${vizHtml(view.stations, r.segs)}<div class="tix">${r.segs.map((g) => segHtml(g, ++n)).join("")}</div></div></div>`;
+          <div class="mid"><div class="rt"><span class="chip" title="Tickets">${ICON.ticket}${r.tickets}</span><span class="chip" title="Total fare">৳${r.fare}</span><span class="chip" title="Fewest seats left">${ICON.seat}${r.minSeats}</span>${extra}${altChips(r)}</div>${vizHtml(view.stations, r.segs)}<div class="tix">${r.segs.map((g) => segHtml(g, ++n, r.alts > 0)).join("")}</div></div><button class="cpy" type="button" data-copy="${i}" title="Copy this route" aria-label="Copy this route">${ICON.copy}</button></div>`;
       }).join("");
       $("more").hidden = shown >= routes.length;
       $("more").innerHTML = `${ICON.down}${Math.min(8, routes.length - shown)}`;
       root.querySelectorAll(".row[data-i]").forEach((el) => {
         const pick = () => { view.pick = +el.dataset.i; renderMatrix(); renderRoutes(); };
         el.onclick = pick;
-        el.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+        el.onkeydown = (e) => { if (e.target !== el) return; if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
       });
+      root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = (ev) => {
+        ev.stopPropagation();
+        const i = +b.dataset.copy, r = view.routes[i];
+        if (r) copyText(`Option ${i + 1}\n` + r.segs.map(segLine).join("\n") + `\nTotal about ৳${r.fare}`, b);
+      }));
     }
     function recompute() {
       view.routes = C.findRoutes(view.counts, view.stations.length, view.fi, view.ti, 0, view.sort);
@@ -864,7 +987,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       const stopsAll = C.absoluteTimes(all.map((x) => ({ ...x })));
       const namesAll = stopsAll.map((x) => x.name);
       const fi0 = namesAll.findIndex((x) => near(x, f.from)), ti0 = namesAll.findIndex((x) => near(x, f.to));
-      if (fi0 < 0 || ti0 < 0) return fail(`${fi0 < 0 ? f.from : f.to} is not in the stop list of this train.`);
+      if (fi0 < 0 || ti0 < 0) return fail("Ticket not available");
       if (fi0 >= ti0) return fail("This train runs the other way: your From comes after your To on its line.");
       const off = o.whole ? 0 : fi0;
       let stops = o.whole ? stopsAll : stopsAll.slice(fi0, ti0 + 1);
@@ -878,7 +1001,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         const n0 = stations.length;
         for (let j = 1; j < n0; j++) {
           if (halted()) break;
-          say2(`Verifying stop ${j} of ${n0 - 1}: ${stations[j]}`);
+          say2("Searching…");
           prog(j - 1, n0 - 1, n0 - j + Math.max(0, (n0 * (n0 - 1)) / 2 - (n0 - 1)));
           let c;
           try { c = await fetchPair(ctx, stations[0], stations[j]); }
@@ -887,17 +1010,16 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
           if (c === false) dead.add(j);
         }
         if (halted()) { if (live) { say("Stopped."); hideProg(); } return { stopped: true }; }
-        if (dead.has(fi0 - off) || dead.has(ti0 - off)) return fail(`${dead.has(fi0 - off) ? f.from : f.to} is not a stop of ${ctx.name}.`);
+        if (dead.has(fi0 - off) || dead.has(ti0 - off)) return fail("Ticket not available");
         if (dead.size) {
           removed = [...dead].map((j) => stations[j]);
           stops = stops.filter((_, j) => !dead.has(j));
           stations = stops.map((x) => x.name);
-          store.set(`tsf3_route|${ctx.id}|${ctx.start}|${ctx.end}`, all.filter((_, k) => !dead.has(k - off)));
         }
       }
       const fi = stations.findIndex((x) => near(x, f.from)), ti = stations.findIndex((x) => near(x, f.to));
       if (live) refreshList();
-      const how = { site: "Read all stops from the railway site", saved: "Used the saved stop list for this train", probe: "Stops found by checking known stations" }[got.how];
+      const how = { site: "Read all stops from the railway site", probe: "Stops found by checking known stations" }[got.how];
       const dr = (got.dropped || []).length;
       const skipped = (dr ? ` · ${dr} known station${dr > 1 ? "s" : ""} not on this train` : "") + (removed.length ? ` · removed ${removed.length} non-stop${removed.length > 1 ? "s" : ""} (${removed.join(", ")})` : "");
       const noteText = `${how}: ${stations.length} stops${stops.some((x) => T(x) != null) ? ", with times" : ", no times available"}${skipped}`;
@@ -916,7 +1038,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         if (halted()) break;
         if (have(i, j)) continue;
         const had = !!peek(ctx, stations[i], stations[j]);
-        say2(`Checking ${stations[i]} → ${stations[j]}`);
+        say2("Searching…");
         try { V.counts[i + "," + j] = await fetchPair(ctx, stations[i], stations[j]); }
         catch (e) { if (e.message === "AUTH") throw e; V.counts[i + "," + j] = null; failed++; lastErr = e.message; }
         done++; if (!had) todo--;
@@ -944,12 +1066,12 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       const v = m ? C.parseClock(m[1]) : null;
       return v == null ? "" : C.fmtClock(v);
     };
-    const keyOf = (b, sort) => (sort === "fare" ? [b.fare, b.gaps, b.tickets] : [b.gaps, b.tickets, b.fare]);
+    const keyOf = (b, sort) => (sort === "fare" ? [b.fare, b.gaps, b.tickets] : [b.gaps, b.tickets, b.alts || 0, b.fare]);
     const cmpKeys = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] - b[i]; return 0; };
     const bestText = (e) => {
-      if (e.state === "direct") return "One ticket, direct";
+      if (e.state === "direct") return "One ticket, direct" + (e.best.alts ? ` (${clsName(e.best.cls)})` : "");
       const v = e.view;
-      return e.best.segs.map((g) => `${v.stations[g.a]} → ${v.stations[g.b]}`).join("  +  ");
+      return e.best.segs.map((g) => `${v.stations[g.a]} → ${v.stations[g.b]}${g.c.alt ? ` (${clsName(g.c.cls)})` : ""}`).join("  +  ");
     };
     const depOf = (e) => (e.view ? timeOf(e.view.stops[e.view.fi], false) : "") || e.dep || "";
 
@@ -960,7 +1082,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       segs.forEach((g, idx) => {
         if (idx === 0) out += jn(stations[g.a], "end");
         k++;
-        out += jl(g.b - g.a, `<b class="tb">${ICON.ticket}${k}</b>`, g.c ? "৳" + g.c.fare : "");
+        out += jl(g.b - g.a, `<b class="tb">${ICON.ticket}${k}</b>`, g.c ? "৳" + g.c.fare + (g.c.alt ? `<span class="cxs">${esc(clsName(g.c.cls))}</span>` : "") : "", g.c && g.c.alt ? "alt" : "");
         out += jn(stations[g.b], idx === segs.length - 1 ? "end" : "chg");
       });
       return `<div class="jr${small ? " sm" : ""}">${out}</div>`;
@@ -969,14 +1091,14 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       let out = jn(v.stations[v.fi], "end");
       for (let i = v.fi; i < v.ti; i++) {
         const c = v.counts[i + "," + (i + 1)];
-        const ok = c && c.online > 0, unknown = c === null || c === undefined;
-        out += jl(1, ok ? `<b class="tb">${ICON.seat}${c.online}</b>` : unknown ? `<b class="tb">?</b>` : `<b class="tb">${ICON.x}</b>`, "", ok ? "" : unknown ? "u" : "bad");
+        const l = legFor(c), unknown = c === null || c === undefined;
+        out += jl(1, l ? `<b class="tb">${ICON.seat}${l.online}</b>` : unknown ? `<b class="tb">?</b>` : `<b class="tb">${ICON.x}</b>`, l && l.alt ? `<span class="cxs">${esc(clsName(l.cls))}</span>` : "", l ? (l.alt ? "alt" : "") : unknown ? "u" : "bad");
         out += jn(v.stations[i + 1], i + 1 === v.ti ? "end" : "");
       }
       return `<div class="jr${small ? " sm" : ""}">${out}</div>`;
     }
     const vizFor = (e) => (e.state === "direct"
-      ? `<div class="jr sm">${jn(e.from, "end")}${jl(1, `<b class="tb">${ICON.ticket}1</b>`, "৳" + e.best.fare)}${jn(e.to, "end")}</div>`
+      ? `<div class="jr sm">${jn(e.from, "end")}${jl(1, `<b class="tb">${ICON.ticket}1</b>`, "৳" + e.best.fare + (e.best.alts ? `<span class="cxs">${esc(clsName(e.best.cls))}</span>` : ""), e.best.alts ? "alt" : "")}${jn(e.to, "end")}</div>`
       : vizHtml(e.view.stations, e.best.segs, true));
 
     function renderCompare() {
@@ -988,11 +1110,11 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       $("cmpSub").innerHTML = `<span class="mchip" title="Trains">${ICON.train}${order.length}</span><span class="mchip ok" title="With a way to travel">${ICON.check}${ready}</span>`;
       $("cmp").innerHTML = list.map((e, i) => {
         const top = settled && i === 0 && e.best;
-        const chips = (top ? `<span class="chip gold" title="Best option">${ICON.star}</span>` : "") + (e.state === "direct" ? `<span class="chip direct" title="A seat is free for your whole trip">${ICON.ticket}</span>` : "");
+        const chips = (top ? `<span class="chip gold" title="Best option">${ICON.star}</span>` : "") + (e.state === "direct" ? `<span class="chip direct" title="A seat is free for your whole trip">${ICON.ticket}</span>` : "") + (e.best ? (e.state === "direct" ? (e.best.alts ? `<span class="chip alt">${esc(clsName(e.best.cls))}</span>` : "") : altChips(e.best)) : "");
         const lead = `<span class="cn">${i + 1}</span>`;
         if (e.best) {
           const met = `<div class="cmet"><div title="Leaves">${ICON.clock}<b>${esc(depOf(e)) || "–"}</b></div><div title="Tickets">${ICON.ticket}<b>${e.best.tickets}</b></div><div class="fare" title="Total fare">${ICON.tag}<b>৳${e.best.fare}</b></div><div title="Seats left">${ICON.seat}<b>${e.best.minSeats}</b></div></div>`;
-          return `<div class="crow ${top ? "top" : ""}" data-id="${esc(e.id)}" tabindex="0" role="button">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span>${chips}</div>${vizFor(e)}</div>${met}</div>`;
+          return `<div class="crow ${top ? "top" : ""}" data-id="${esc(e.id)}" tabindex="0" role="button">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span>${chips}</div>${vizFor(e)}</div>${met}<button class="cpy" type="button" data-copyc="${esc(e.id)}" title="Copy this route" aria-label="Copy this route">${ICON.copy}</button></div>`;
         }
         if (e.state === "none" && e.view) return `<div class="crow dim" data-id="${esc(e.id)}" tabindex="0" role="button">${lead}<div class="cm"><div class="ctop"><span class="nm">${esc(e.name)}</span><span class="mchip bad" title="No way to travel">${ICON.x}</span></div>${lineHtml(e.view, true)}</div></div>`;
         const icon = e.state === "busy" ? `<span class="spin" title="Scanning">${ICON.refresh}</span>` : e.state === "wait" ? `<span title="Waiting">${ICON.clock}</span>` : `<span title="${esc(e.reason || "Could not scan")}">${ICON.x}</span>`;
@@ -1001,8 +1123,13 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       root.querySelectorAll(".crow[data-id]").forEach((el) => {
         const go = () => { if (!running) openTrain(el.dataset.id); };
         el.onclick = go;
-        el.onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } };
+        el.onkeydown = (ev) => { if (ev.target !== el) return; if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); go(); } };
       });
+      root.querySelectorAll("[data-copyc]").forEach((b) => (b.onclick = (ev) => {
+        ev.stopPropagation();
+        const e = results.get(b.dataset.copyc);
+        if (e && e.best) copyText(`${e.name}: ${bestText(e)}\n${e.best.tickets} ticket${e.best.tickets > 1 ? "s" : ""}, total about ৳${e.best.fare}`, b);
+      }));
     }
     function showView(v, text) {
       view = v;
@@ -1029,19 +1156,20 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       if (!f.date) return say("Pick a date.", true);
       if (needAuth()) return;
       note("");
-      say(`Looking for trains ${f.from} → ${f.to} on ${f.date}…`);
+      say(`Looking for trains ${f.from} → ${f.to} on ${dmy(f.iso)}…`);
       const trains = await fetchTrains(f.from, f.to, f.date, f.cls);
       fillTrains(trains);
       if (!trains.length) return say("No trains found for that class and date. Try another class or date.", true);
-      const usable = trains.filter((t) => (t.seat_types || []).some((x) => x.type === f.cls));
-      if (!usable.length) return say(`None of the ${trains.length} trains has ${clsName(f.cls)} on this route. Pick another class.`, true);
+      const usable = trains.filter((t) => (t.seat_types || []).length);
+      if (!usable.length) return say("No seat information for these trains. Try another date.", true);
       results = new Map(); order = [];
       $("cmpInfo").hidden = true;
       usable.forEach((t) => {
         const id = C.trainId(t.trip_number);
         const d = analyse([t], id, f.cls);
         const e = { id, name: t.trip_number, state: "wait", dep: depOfTrain(t), from: f.from, to: f.to };
-        if (d && d.online > 0) { e.state = "direct"; e.best = { tickets: 1, gaps: 0, fare: d.fare, minSeats: d.online, extra: 0, segs: [] }; }
+        if (d && d.online > 0) { e.state = "direct"; e.best = { tickets: 1, gaps: 0, fare: d.fare, minSeats: d.online, extra: 0, segs: [], alts: 0, cls: f.cls }; }
+        else if (d && d.alt && d.alt.length) { const l = legFor(d); e.state = "direct"; e.best = { tickets: 1, gaps: 0, fare: l.fare, minSeats: l.online, extra: 0, segs: [], alts: 1, cls: l.cls }; }
         order.push(e); results.set(id, e);
       });
       $("out").hidden = true;
@@ -1075,7 +1203,6 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       const tip = `Only the stops between ${f.from} and ${f.to} are scanned in this mode.${extra}`;
       $("cmpInfo").title = tip; $("cmpInfo").hidden = false;
       note("");
-      $("copy").disabled = !order.some((e) => e.best);
       stopFlag ? say("Stopped. Showing what was compared so far.") : say("Done. Click a train to see its seats and tickets.", "ok");
       $("ccompare").scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -1085,6 +1212,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       setRunning(true); stopFlag = false;
       try {
         const f = readForm();
+        lastKey = formKey();
         await runAll(f);
       } catch (e) { say(explain(e), true); hideProg(); }
       setRunning(false);
@@ -1101,7 +1229,7 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
         if (!p || running) return;
         $("from").value = p.from; $("to").value = p.to; if (p.cls) $("cls").value = p.cls;
         trainsMeta = {};
-        saveForm();
+        saveForm(); formChanged();
         say(`${p.from} → ${p.to} loaded. Pick a date and press Scan all trains.`);
       }));
       root.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
@@ -1119,20 +1247,44 @@ td.pick{box-shadow:inset 0 0 0 3px var(--ink)}
       say(`Saved ${f.from} → ${f.to} (${clsName(f.cls)}).`, "ok");
     };
 
+    let lastKey = "", pendingSite = null;
+    const formKey = () => [$("from").value, $("to").value, $("date").value, $("cls").value].join("|");
+    function resetOutput() {
+      results = new Map(); order = []; trainsMeta = {};
+      view = { stops: [], stations: [], counts: {}, fi: 0, ti: 0, routes: [], pick: -1, sort: "tickets", shown: 8, updated: 0, iso: "" };
+      $("cmp").innerHTML = ""; $("ccompare").hidden = true; $("out").hidden = true; $("cmpInfo").hidden = true;
+      note(""); hideProg(); lastKey = "";
+    }
+    function formChanged() {
+      if (running || !lastKey || formKey() === lastKey) return;
+      resetOutput();
+      say("Search changed. Press Scan all trains.");
+    }
+    ["from", "to", "cls"].forEach((id) => $(id).addEventListener("change", formChanged));
+    function applySite(p) {
+      const known = knownNames();
+      $("from").value = C.fixStation(p.from, known); $("to").value = C.fixStation(p.to, known);
+      const iso = C.apiToIso(p.date); if (iso) setDate(iso);
+      if (p.cls && C.CLASSES.some(([v]) => v === p.cls)) $("cls").value = p.cls;
+      if (formKey() !== lastKey) resetOutput();
+      say(`Taken from the site: ${$("from").value} → ${$("to").value}${$("date").value ? " on " + dmy($("date").value) : ""}. Press Scan all trains.`);
+    }
+    onSiteSearch = (p) => { if (running) pendingSite = p; else applySite(p); };
     $("scan").onclick = runScan;
     $("stop").onclick = () => { stopFlag = true; say("Stopping…"); };
     $("cmp").addEventListener("click", (e) => { if (!e.target.closest(".skipbtn") || !running) return; skipFlag = true; say("Skipping this train…"); });
-    $("copy").onclick = async () => {
-      const onCompare = !$("ccompare").hidden && $("out").hidden;
-      const sortNow = SORT;
-      const ranked = order.filter((e) => e.best).sort((a, b) => cmpKeys(keyOf(a.best, sortNow), keyOf(b.best, sortNow)));
-      const text = onCompare ? ranked.slice(0, 3).map((e, i) => `${i + 1}. ${e.name}: ${bestText(e)}\n${e.best.tickets} ticket${e.best.tickets > 1 ? "s" : ""}, total about ৳${e.best.fare}`).join("\n\n") : view.routes.slice(0, 3).map((r, i) => `Option ${i + 1}\n` + r.segs.map(segLine).join("\n") + `\nTotal about ৳${r.fare}`).join("\n\n");
-      try { await navigator.clipboard.writeText(text); say("Copied the best routes."); } catch (e) { say("Could not copy. Select the text and copy it by hand.", true); }
-    };
-    const toggle = (open) => { panel.hidden = !open; $("launch").setAttribute("aria-expanded", String(open)); if (open) prefill(); };
+    function setMini(on) {
+      panel.classList.toggle("mini", on);
+      $("cal").hidden = true;
+      $("min").innerHTML = on ? "&#9633;" : "&minus;";
+      $("min").title = on ? "Restore" : "Minimize";
+      $("min").setAttribute("aria-label", on ? "Restore panel" : "Minimize panel");
+    }
+    $("min").onclick = () => setMini(!panel.classList.contains("mini"));
+    const toggle = (open) => { panel.hidden = !open; $("cal").hidden = true; $("launch").setAttribute("aria-expanded", String(open)); if (open) { setMini(false); prefill(); } };
     $("launch").onclick = () => toggle(panel.hidden);
     $("close").onclick = () => toggle(false);
-    root.addEventListener("keydown", (e) => { if (e.key === "Escape" && !panel.hidden) toggle(false); });
+    root.addEventListener("keydown", (e) => { if (e.key !== "Escape") return; if (!$("cal").hidden) { $("cal").hidden = true; return; } if (!panel.hidden) toggle(false); });
     $("bar").addEventListener("pointerdown", (e) => {
       if (e.target.closest("button, a")) return;
       const r = panel.getBoundingClientRect();
