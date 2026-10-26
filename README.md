@@ -1,3 +1,6 @@
+Setup Video
+https://youtu.be/EWoXsf-7Xak
+
 # Ticket Finder
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
